@@ -22,7 +22,15 @@ run: server
 
 debug: server
 	gnome-terminal -- bash -c "gdb -ex run --args ./server 1600; exec bash"
-	# gnome-terminal -- gdb -ex run --args ./server 1600
+
+push:
+ifndef COMMIT_MSG
+	$(error COMMIT_MSG is not set)
+endif
+	git add .
+	git commit -m "$(COMMIT_MSG)"
+	git push
+
 
 debugg: server
 	export LD_LIBRARY_PATH=/usr/lib/debug:/lib/x86_64-linux-gnu/debug:/usr/lib/x86_64-linux-gnu/debug

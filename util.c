@@ -6,8 +6,6 @@
 #include <string.h>
 #include <pthread.h>
 
-
-
 int sendall(int s, char *buf, int *len)
 {
     int total = 0;
@@ -31,9 +29,6 @@ int sendall(int s, char *buf, int *len)
 
     return n==-1?-1:0;
 }
-
-
-
 
 int get_fsize(char* file, struct stat st)
 {
@@ -62,18 +57,15 @@ int check(int stat, char* message)
     }
 }
 
-void * connect_and_send(void * client_socket_fd)
+void connect_and_send(int * client_socket_fd)
 {
-    int client_socket = *(int*) client_socket_fd;
+    int client_socket = *client_socket_fd;
     char buffer[BUFSIZE];
     char filename[261];
     size_t num_bytes;
     struct stat st;
     int n;
-    char packet_data[BUFSIZE+1];
-    // char packet[PACKET+1];
     char packet[1024];
-    // int content_length = -1;
     char res_status[4];
     const char * mime_type;
     char req_method[10];
@@ -84,32 +76,42 @@ void * connect_and_send(void * client_socket_fd)
     if(recv(client_socket, buffer, BUFSIZE, 0) <= 0)
     {
       perror("ERROR in recv()");
-      close(client_socket);
-      pthread_exit((void*) 1);
+      return;
     }
     else
     {
         n = sscanf(buffer, "%s %s %s", req_method, req_uri, req_version);
         if (n < 3)
         {
-            sprintf(packet,"%s 400 Bad Request\r\n\r\n", req_version);
-            int packet_sz = (int)strlen(packet);
-            sendall(client_socket, packet, &packet_sz);
+            int p_sz = sprintf(packet,"%s 400 Bad Request\r\n\r\n", req_version);
+            if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
+            return;
         }
+
+        // if(strcmp(req_version, "HTTP/1.1") != 0 || strcmp(req_version, "HTTP/1.0") != 0)
+        // {
+        //     int p_sz = sprintf(packet,"%s 505 HTTP Version Not Supported\r\n\r\n", req_version);
+        //     if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
+        //     return;
+        // }
     }
 
-    //still need to handle req_version
     if(strcmp(req_method, "GET") == 0)
     {
-        if(!valid_path(req_uri, filename, req_version, packet, client_socket)) return NULL;
+        if(!valid_path(req_uri, filename))
+        {
+            int p_sz = sprintf(packet,"%s 403 Forbidden\r\n\r\n", req_version);
+            if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
+            return;
+        }
         
         FILE *fp = fopen(filename, "r");
         if (fp == NULL)
         {
             printf("Could not open file for reading");
-            sprintf(res_status, "%s", "404");
-            // send and exit
-
+            int p_sz = sprintf(packet,"%s 404 Not Found\r\n\r\n", req_version);
+            if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
+            //return;
         }
         else
         {
@@ -118,45 +120,31 @@ void * connect_and_send(void * client_socket_fd)
             num_bytes = get_fsize(filename, st);
         }
 
-        sprintf(packet,"%s %s OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", req_version, res_status , mime_type, (int)num_bytes);
-        write(client_socket, packet, strlen(packet));
-
+        int p_sz = sprintf(packet,"%s %s OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", req_version, res_status , mime_type, (int)num_bytes);
+        if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
 
         while (num_bytes > 0)
         {
-            printf("SENDING PACKET\n");
-            memset(packet_data, 0, sizeof(packet_data));
-            memset(buffer, 0, sizeof(buffer));
             memset(packet, 0, sizeof(packet));
             int chunk = BUFSIZE;
-            
             if(num_bytes < BUFSIZE)
             {
                 chunk = num_bytes;
             }
-
-
-            size_t numb_read = fread(packet, sizeof(char), chunk, fp);
-            int res_w = write(client_socket, packet, strlen(packet));
-            if(!res_w) printf("\nERROR WRITING\n");
-            //sendall(client_socket, packet, &packet_sz);
+            int numb_read = (int) fread(packet, sizeof(char), chunk, fp);
+            if(check(sendall(client_socket, packet, &numb_read), "Error writing file to client\n") < 0) return;
             num_bytes -= numb_read;
         }
     }
     else
     {
-        sprintf(packet,"%s 405 Method Not Allowed\r\n\r\n", req_version);
-        int packet_sz = (int)strlen(packet);
-        sendall(client_socket, packet, &packet_sz);
-        // return status code of 405 -> Method Not Allowed-
-        pthread_exit((void*) 1);
+        int p_sz = sprintf(packet,"%s 405 Method Not Allowed\r\n\r\n", req_version);
+        if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
+        return;
     }
-
-
-    pthread_exit((void*) 1);
-    // essentially a recv_all function but for the client-side i can add in condition while buf_recv < content_length
-    // while((num_bytes = recv(client_socket, buffer+msg_len, sizeof(buffer)-msg_len-1, 0)) > 0)
+    close(client_socket);
 }
+
 void * thread_function()
 {
     int *pclient;
@@ -204,7 +192,7 @@ const char* get_mime_type(const char* file_path) {
     }
 }
 
-int valid_path(char * req_uri, char * filename, char * req_version, char * packet, int client_socket)
+int valid_path(char * req_uri, char * filename)
 {
 
     if (strcmp(req_uri, "/") == 0)
@@ -220,11 +208,7 @@ int valid_path(char * req_uri, char * filename, char * req_version, char * packe
 
     if (strstr(filename, "..") != NULL)
     {
-        sprintf(packet,"%s 403 Forbidden\r\n\r\n", req_version);
-        rm_null(packet, 1);
-        int packet_sz = (int)strlen(packet);
-        sendall(client_socket, packet, &packet_sz);
-        return 0; // contains parent directory, not valid
+        return 0;
     }
 
     return 1;

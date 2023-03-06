@@ -1,5 +1,4 @@
 #define _XOPEN_SOURCE 700
-// #include <netdb.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -14,9 +13,6 @@
 #include "queue.h"
 #include "util.h"
 
-//QUEUE should be a power of 2 greater than 32
-
-
 int main(int argc, char **argv) {
   int sockfd, new_connect;
   socklen_t clientlen;
@@ -26,8 +22,6 @@ int main(int argc, char **argv) {
   int status; // return status of getaddrinfo()
   
 
-
-  // Thread pool implementation!
   pthread_t thread_pool[POOL_THREADS];
   
 
