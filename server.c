@@ -10,8 +10,17 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <sys/time.h>
+#include <signal.h>
 #include "queue.h"
 #include "util.h"
+
+void sigint_handler(int sig)
+{
+  printf("Received the signal %d\n", sig);
+  flag = 1;
+  pthread_cond_broadcast(&conditional);
+}
 
 int main(int argc, char **argv) {
   int sockfd, new_connect;
@@ -20,10 +29,13 @@ int main(int argc, char **argv) {
   int optval = 1;
   struct addrinfo hints, *res, *p;
   int status; // return status of getaddrinfo()
-  
-
   pthread_t thread_pool[POOL_THREADS];
-  
+
+  // Registering signal handler
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = sigint_handler;
+  sigaction(SIGINT, &sa, NULL);
 
   for(int i = 0; i < POOL_THREADS; i++)
   {
@@ -50,7 +62,7 @@ int main(int argc, char **argv) {
   for (p = res; p != NULL; p = p->ai_next)
   {
     if(check((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)), "listener: socket")) continue;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval , sizeof(int));
+    if(check(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&optval, sizeof(int)), "Set socket error")) continue;
     if(check(bind(sockfd, p->ai_addr, p->ai_addrlen), "listener: bind() error")) exit(1);
     if(check(listen(sockfd, BACKLOG), "listener: listen() error")) exit(1);
     break;
@@ -59,15 +71,25 @@ int main(int argc, char **argv) {
 
   
   for (;;) {
+    if (flag == 1)
+      break;
     clientlen = sizeof their_addr;
     if(check((new_connect = accept(sockfd, (struct sockaddr *)&their_addr, &clientlen)), "Couldn't accept connection!")) continue; // accept() is blocking
-
     int *pclient = malloc(sizeof(int));
     *pclient = new_connect;
-
+    
     pthread_mutex_lock(&mutex);
     enqueue(pclient);
     pthread_cond_signal(&conditional);
     pthread_mutex_unlock(&mutex);
   }
+
+  for(int i = 0; i < POOL_THREADS; i++)
+  {
+    pthread_join(thread_pool[i], NULL);
+  }
+
+  close(sockfd);
+
+  return 0;
 }

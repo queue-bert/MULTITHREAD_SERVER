@@ -6,12 +6,13 @@
 #include <stdio.h>
 
 #define QUEUE_SIZE 100
-#define BUFSIZE 512
+#define BUFSIZE 8000
 #define HEADER 3
 
 
 extern pthread_mutex_t mutex;
 extern pthread_cond_t conditional;
+
 
 void enqueue(int* item);
 int* dequeue();

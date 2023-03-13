@@ -17,6 +17,7 @@ void enqueue(int* item) {
     printf("Queue is full\n");
     return;
   } else {
+    // printf("Thread #%d added\n", *item);
     queue[queue_counter] = item;
     queue_counter++;
   }

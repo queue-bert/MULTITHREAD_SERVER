@@ -5,6 +5,12 @@
 #include "queue.h"
 #include <string.h>
 #include <pthread.h>
+#include <sys/time.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/sendfile.h>
+
+volatile sig_atomic_t flag = 0;
 
 int sendall(int s, char *buf, int *len)
 {
@@ -60,87 +66,138 @@ int check(int stat, char* message)
 void connect_and_send(int * client_socket_fd)
 {
     int client_socket = *client_socket_fd;
-    char buffer[BUFSIZE];
+    char buffer[BUFSIZE+1];
     char filename[261];
     size_t num_bytes;
     struct stat st;
     int n;
+    int msg_size = 0;
     char packet[1024];
-    char res_status[4];
     const char * mime_type;
     char req_method[10];
     char req_uri[256];
-    char req_version[10];
+    char req_version[10] = "HTTP/?";
+    char keep_conn[20];
+    struct timeval timeout;
+    timeout.tv_sec = 10;
+    timeout.tv_usec = 0;
+    int filefd;
+    off_t offset = 0;
+    char http_req[1000];
+    char * crlf;
 
 
-    if(recv(client_socket, buffer, BUFSIZE, 0) <= 0)
+    setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (void *)&timeout , sizeof(timeout));
+    for(;;)
     {
-      perror("ERROR in recv()");
-      return;
-    }
-    else
-    {
-        n = sscanf(buffer, "%s %s %s", req_method, req_uri, req_version);
-        if (n < 3)
+        memset(buffer, 0, BUFSIZE+1);
+        memset(keep_conn, 0, 20);
+        memset(packet, 0, 1024);
+        msg_size = 0;
+        offset = 0;
+        buffer[BUFSIZE] = '\0';
+
+        while(1)
+        {
+            if(check((n = read(client_socket, buffer+msg_size, sizeof(buffer)-msg_size-1)), "CONNECTION TIMEOUT"))
+            {
+                close(client_socket);
+                return;
+            }
+            msg_size += n;
+            if(msg_size > BUFSIZE - 1 || strstr(buffer, "\r\n\r\n")) break;
+        }
+        printf("BUFFER %s\n", buffer);
+
+        
+
+        if((crlf = strchr(buffer, '\r')) == NULL)
         {
             int p_sz = sprintf(packet,"%s 400 Bad Request\r\n\r\n", req_version);
-            if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
-            return;
-        }
-
-        // if(strcmp(req_version, "HTTP/1.1") != 0 || strcmp(req_version, "HTTP/1.0") != 0)
-        // {
-        //     int p_sz = sprintf(packet,"%s 505 HTTP Version Not Supported\r\n\r\n", req_version);
-        //     if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
-        //     return;
-        // }
-    }
-
-    if(strcmp(req_method, "GET") == 0)
-    {
-        if(!valid_path(req_uri, filename))
-        {
-            int p_sz = sprintf(packet,"%s 403 Forbidden\r\n\r\n", req_version);
-            if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
-            return;
-        }
-        
-        FILE *fp = fopen(filename, "r");
-        if (fp == NULL)
-        {
-            printf("Could not open file for reading");
-            int p_sz = sprintf(packet,"%s 404 Not Found\r\n\r\n", req_version);
-            if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
-            //return;
+            check(sendall(client_socket, packet, &p_sz), "Error writing 400 header to client\n");
+            break;
         }
         else
         {
-            sprintf(res_status, "%s", "200");
+            int size = crlf - buffer;
+            strncpy(http_req, buffer, size);
+            http_req[size] = '\0';
+
+            if ((n = sscanf(http_req, "%s %s %s", req_method, req_uri, req_version)) < 3)
+            {
+                int p_sz = sprintf(packet,"%s 400 Bad Request\r\n\r\n", req_version);
+                check(sendall(client_socket, packet, &p_sz), "Error writing 400 header to client\n");
+                break;
+            }
+        }
+        
+        if(strcmp(req_version, "HTTP/1.1") != 0 && strcmp(req_version, "HTTP/1.0") != 0)
+        {
+            int p_sz = sprintf(packet,"%s 505 HTTP Version Not Supported\r\n\r\n", req_version);
+            check(sendall(client_socket, packet, &p_sz), "Error writing 505 header to client\n");
+            break;
+        }
+
+        char * keep_alive = strstr(buffer, "Connection:");
+        if(keep_alive != NULL)
+        {
+            printf("ANOTHER REQUEST");
+            n = sscanf(keep_alive+11, "%s", keep_conn);
+            if(strcmp(keep_conn, "keep-alive") == 0)
+                sprintf(keep_conn, "%s", "Keep-Alive");
+            if(strcmp(keep_conn, "close") == 0)
+                sprintf(keep_conn, "%s", "Close");
+        }
+        else
+        {
+            strcpy(keep_conn, "Close");
+        }
+            
+        printf("THIS IS CONNECTION TYPE: %s\n", keep_conn);
+
+        // printf("SIZE OF KEEP: %ld", strlen(keep_conn)); 
+        // printf("Connection: %s\n", keep_conn);
+
+        if(strcmp(req_method, "GET") == 0)
+        {
+            // printf("IN GET");
+            if(!valid_path(req_uri, filename))
+            {
+                int p_sz = sprintf(packet,"%s 403 Forbidden\r\n\r\n", req_version);
+                check(sendall(client_socket, packet, &p_sz), "Error writing 403 header to client\n");
+                break;
+            }
+
+            if(check((filefd = open(filename, O_RDONLY)), "Could not open file"))
+            {
+                int p_sz = sprintf(packet,"%s 404 Not Found\r\n\r\n", req_version);
+                check(sendall(client_socket, packet, &p_sz), "Error writing 404 header to client\n");
+                break;
+            }
             mime_type = get_mime_type(filename);
             num_bytes = get_fsize(filename, st);
-        }
 
-        int p_sz = sprintf(packet,"%s %s OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n", req_version, res_status , mime_type, (int)num_bytes);
-        if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
+            int p_sz = sprintf(packet,"%s 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: %s\r\n\r\n", req_version, mime_type, (int)num_bytes, keep_conn);
+            printf("PACKET: %s\n", packet);
+            if(check(sendall(client_socket, packet, &p_sz), "Error writing 200 OKAY to client\n") < 0) break;
 
-        while (num_bytes > 0)
-        {
-            memset(packet, 0, sizeof(packet));
-            int chunk = BUFSIZE;
-            if(num_bytes < BUFSIZE)
+            while(num_bytes > 0)
             {
-                chunk = num_bytes;
+                ssize_t sent;
+                if(check((sent = sendfile(client_socket, filefd, &offset, num_bytes)), "Error sending file")) break;
+                num_bytes -= sent;
             }
-            int numb_read = (int) fread(packet, sizeof(char), chunk, fp);
-            if(check(sendall(client_socket, packet, &numb_read), "Error writing file to client\n") < 0) return;
-            num_bytes -= numb_read;
+            close(filefd);
         }
-    }
-    else
-    {
-        int p_sz = sprintf(packet,"%s 405 Method Not Allowed\r\n\r\n", req_version);
-        if(check(sendall(client_socket, packet, &p_sz), "Error writing header to client\n") < 0) return;
-        return;
+        else
+        {
+            int p_sz = sprintf(packet,"%s 405 Method Not Allowed\r\n\r\n", req_version);
+            check(sendall(client_socket, packet, &p_sz), "Error writing 405 header to client\n");
+            break;
+        }
+
+        if(strcmp(keep_conn, "Close") == 0)
+            break;
     }
     close(client_socket);
 }
@@ -148,27 +205,28 @@ void connect_and_send(int * client_socket_fd)
 void * thread_function()
 {
     int *pclient;
-    for(;;)
+    while(!flag)
     {
         pthread_mutex_lock(&mutex);
-        if((pclient = dequeue()) == NULL)
+        while((!flag && (pclient = dequeue()) == NULL))
         {
             pthread_cond_wait(&conditional, &mutex);
-            pclient = dequeue();
-
         }
         pthread_mutex_unlock(&mutex);
         if(pclient != NULL)
         {
             connect_and_send(pclient);
+            free(pclient);
         }
     }
+    pthread_exit(NULL);
 }
 
-const char* get_mime_type(const char* file_path) {
+const char * get_mime_type(const char* file_path)
+{
     const char* file_extension = strrchr(file_path, '.');
     if (file_extension) {
-        if (strcmp(file_extension, ".html") == 0) {
+        if (strcmp(file_extension, ".html") == 0 || strcmp(file_extension, ".htm") == 0) {
             return "text/html";
         } else if (strcmp(file_extension, ".txt") == 0) {
             return "text/plain";
@@ -195,15 +253,16 @@ const char* get_mime_type(const char* file_path) {
 int valid_path(char * req_uri, char * filename)
 {
 
-    if (strcmp(req_uri, "/") == 0)
+    if (strcmp(req_uri, "/") == 0 || strcmp(req_uri, "/inside/") == 0)
     {
+        // handle if it's .htm
         sprintf(filename, "%s%s", DOCUMENT_ROOT, "/index.html");
-        printf("%s\n", filename);
+        // printf("%s\n", filename);
     }
     else
     {
         sprintf(filename, "%s%s", DOCUMENT_ROOT, req_uri);
-        printf("%s\n", filename);
+        // printf("%s\n", filename);
     }
 
     if (strstr(filename, "..") != NULL)
@@ -212,33 +271,4 @@ int valid_path(char * req_uri, char * filename)
     }
 
     return 1;
-}
-
-int rm_null(char * str, int n)
-{
-    int deletions = 0;
-    char *p = str;
-    char *q = str;
-
-    // int len = strlen(str);
-    // if (len > 0 && str[len-1] == '\0') {
-    //     str[len-1] = ' ';
-    // }
-
-    
-    while (*p)
-    {
-        if (*p == '\0' && deletions < n)
-        {
-            deletions++;
-        }
-        else
-        {
-            *q++ = *p;
-        }
-        p++;
-    }
-    
-    *q = '\0';
-    return deletions;
 }

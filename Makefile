@@ -18,10 +18,10 @@ clean:
 	rm -f server *.o
 
 run: server
-	gnome-terminal -- bash -c "./server 1600; exec bash"
+	gnome-terminal -- bash -c "./server 8080; exec bash"
 
 debug: server
-	gnome-terminal -- bash -c "gdb -ex run --args ./server 1600; exec bash"
+	gnome-terminal -- bash -c "gdb -ex run --args ./server 8080; exec bash"
 
 push:
 ifndef COMMIT_MSG
