@@ -17,9 +17,11 @@
 
 void sigint_handler(int sig)
 {
+  signal(sig, SIG_IGN);
   printf("Received the signal %d\n", sig);
   flag = 1;
   pthread_cond_broadcast(&conditional);
+  signal(sig, sigint_handler);
 }
 
 int main(int argc, char **argv) {

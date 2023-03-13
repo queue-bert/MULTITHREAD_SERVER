@@ -141,7 +141,7 @@ void connect_and_send(int * client_socket_fd)
         char * keep_alive = strstr(buffer, "Connection:");
         if(keep_alive != NULL)
         {
-            printf("ANOTHER REQUEST");
+            // printf("ANOTHER REQUEST");
             n = sscanf(keep_alive+11, "%s", keep_conn);
             if(strcmp(keep_conn, "keep-alive") == 0)
                 sprintf(keep_conn, "%s", "Keep-Alive");
@@ -153,16 +153,13 @@ void connect_and_send(int * client_socket_fd)
             strcpy(keep_conn, "Close");
         }
             
-        printf("THIS IS CONNECTION TYPE: %s\n", keep_conn);
-
-        // printf("SIZE OF KEEP: %ld", strlen(keep_conn)); 
-        // printf("Connection: %s\n", keep_conn);
+        // printf("THIS IS CONNECTION TYPE: %s\n", keep_conn);
 
         if(strcmp(req_method, "GET") == 0)
         {
-            // printf("IN GET");
-            if(!valid_path(req_uri, filename))
+            if(valid_path(req_uri, filename))
             {
+                // printf("NOT VALID");
                 int p_sz = sprintf(packet,"%s 403 Forbidden\r\n\r\n", req_version);
                 check(sendall(client_socket, packet, &p_sz), "Error writing 403 header to client\n");
                 break;
@@ -252,23 +249,24 @@ const char * get_mime_type(const char* file_path)
 
 int valid_path(char * req_uri, char * filename)
 {
-
     if (strcmp(req_uri, "/") == 0 || strcmp(req_uri, "/inside/") == 0)
     {
-        // handle if it's .htm
         sprintf(filename, "%s%s", DOCUMENT_ROOT, "/index.html");
-        // printf("%s\n", filename);
+    }
+    else if (strstr(req_uri, "/inside/") != NULL)
+    {
+        sprintf(filename, "%s%s", DOCUMENT_ROOT, req_uri+7);
     }
     else
     {
         sprintf(filename, "%s%s", DOCUMENT_ROOT, req_uri);
-        // printf("%s\n", filename);
     }
 
-    if (strstr(filename, "..") != NULL)
-    {
+    if (access(filename, R_OK) == 0) {
         return 0;
-    }
+    } else {
 
+        return 1;
+    }
     return 1;
 }

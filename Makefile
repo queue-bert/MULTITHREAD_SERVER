@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Werror -pedantic -std=c99 -g
-LDLIBS = -lpthread
+LDLIBS = -lpthread -lvalgrind
 
 server: queue.o server.o util.o
 	$(CC) $(CFLAGS) $(LDLIBS) $^ -o $@
@@ -21,7 +21,7 @@ run: server
 	gnome-terminal -- bash -c "./server 8080; exec bash"
 
 debug: server
-	gnome-terminal -- bash -c "gdb -ex run --args ./server 8080; exec bash"
+	gnome-terminal -- bash -c "valgrind --leak-check=full --show-leak-kinds=all ./server 8080; exec bash"
 
 push:
 ifndef COMMIT_MSG
@@ -30,8 +30,3 @@ endif
 	git add .
 	git commit -m "$(COMMIT_MSG)"
 	git push
-
-
-debugg: server
-	export LD_LIBRARY_PATH=/usr/lib/debug:/lib/x86_64-linux-gnu/debug:/usr/lib/x86_64-linux-gnu/debug
-	gnome-terminal -- bash -c "gdb --args ./server 1600 -ex 'set args 1600' -ex 'set env LD_PRELOAD /lib/x86_64-linux-gnu/libpthread.so.0' -ex 'set env LIBC_FATAL_STDERR_=1' -ex 'handle SIGPIPE nostop' -ex 'run' --debug-info-mismatch; exec bash"
