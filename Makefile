@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -Werror -pedantic -std=c99 -g
-LDLIBS = -lpthread -lvalgrind
+LDLIBS = -lpthread
 
 server: queue.o server.o util.o
 	$(CC) $(CFLAGS) $(LDLIBS) $^ -o $@
@@ -21,7 +21,7 @@ run: server
 	gnome-terminal -- bash -c "./server 8080; exec bash"
 
 debug: server
-	gnome-terminal -- bash -c "valgrind --leak-check=full --show-leak-kinds=all ./server 8080; exec bash"
+	gnome-terminal -- bash -c "./server 8080; exec bash"
 
 push:
 ifndef COMMIT_MSG
